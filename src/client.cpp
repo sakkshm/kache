@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -59,7 +60,9 @@ int32_t query(int fd, const char *text) {
         return err;
     }
 
-    std::cout << "Server message recieved: " << std::string(rbuf + 4, len) << std::endl;
+    std::cout << "Server message length: " << len << std::endl;
+    std::cout << "Server message recieved: " << std::string(rbuf + 4, len)
+              << std::endl;
     return 0;
 }
 
@@ -93,18 +96,31 @@ int main(void) {
         std::cout << "Socket successfully connected to server!" << std::endl;
     }
 
+    std::vector<std::string> query_list = {
+        "hello1",
+        "hello2",
+        "hello3",
+    };
+
+    for (const std::string &s : query_list) {
+        int32_t err = query(s_fd, s.data());
+        if (err) {
+            std::cerr << "Unable to send data to Server" << std::endl;
+            return EXIT_FAILURE;
+        }
+    }
+
     int32_t err = query(s_fd, "Hello");
-    if(err) {
+    if (err) {
         std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;
     }
-
 
     err = query(s_fd, "World!");
-    if(err) {
+    if (err) {
         std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;
     }
-    
+
     return EXIT_SUCCESS;
 }
