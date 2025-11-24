@@ -1,3 +1,4 @@
+#include "utils.cpp"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -9,6 +10,58 @@
 // Socket Configs
 #define PORT_NO 1234            // Port number
 #define IP_ADDR INADDR_LOOPBACK // 127.0.0.1
+
+#define MAX_MSG_LEN 4069
+
+int32_t query(int fd, const char *text) {
+    uint32_t len = (uint32_t)strlen(text);
+
+    if (len > MAX_MSG_LEN) {
+        std::cerr << "Message too long for protocol" << std::endl;
+        return -1;
+    }
+
+    // Send request
+    char wbuf[4 + MAX_MSG_LEN];
+
+    memcpy(wbuf, &len, 4);
+    memcpy(&wbuf[4], text, len);
+
+    if (int32_t err = write_all(fd, wbuf, 4 + len)) {
+        return err;
+    }
+
+    // 4 bytes header
+    char rbuf[4 + MAX_MSG_LEN];
+    errno = 0;
+
+    int32_t err = read_full(fd, rbuf, 4);
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading msg_size from conn")
+                  << std::endl;
+        return err;
+    }
+
+    memcpy(&len, rbuf, 4); // assume little endian
+
+    if (len > MAX_MSG_LEN) {
+        std::cerr << "Message too long from conn" << std::endl;
+        return -1;
+    }
+
+    // Reply body
+    err = read_full(fd, &rbuf[4], len);
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading message from conn")
+                  << std::endl;
+        return err;
+    }
+
+    std::cout << "Server message recieved: " << std::string(rbuf + 4, len) << std::endl;
+    return 0;
+}
 
 int main(void) {
 
@@ -40,28 +93,18 @@ int main(void) {
         std::cout << "Socket successfully connected to server!" << std::endl;
     }
 
-    // Sending message to server
-    char wbuf[] = "hello";
-    ssize_t n = write(s_fd, wbuf, strlen(wbuf));
-
-    std::cout << "Sending to server: " << wbuf << std::endl;
-
-    if (n < 0) {
-        std::cerr << "Unable to write to server..." << std::endl;
+    int32_t err = query(s_fd, "Hello");
+    if(err) {
+        std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;
     }
 
-    // Recieveing message from server
-    char rbuf[64] = {};
 
-    n = read(s_fd, &rbuf, sizeof(rbuf) - 1);
-    if (n < 0) {
-        std::cerr << "Unable to read from s_fd: " << s_fd << std::endl;
+    err = query(s_fd, "World!");
+    if(err) {
+        std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;
-    } else {
-        rbuf[n] = '\0';
-        std::cout << "Server message recieved: " << rbuf << std::endl;
     }
-
+    
     return EXIT_SUCCESS;
 }
