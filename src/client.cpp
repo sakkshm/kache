@@ -66,6 +66,8 @@ int32_t query(int fd, const char *text) {
     return 0;
 }
 
+
+
 int main(void) {
 
     std::cout << "Trying to create a socket..." << std::endl;
