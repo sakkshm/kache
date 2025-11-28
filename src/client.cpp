@@ -1,4 +1,4 @@
-#include "utils.cpp"
+#include "utils.hpp"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -14,23 +14,9 @@
 
 #define MAX_MSG_LEN 4069
 
-int32_t query(int fd, const char *text) {
-    uint32_t len = (uint32_t)strlen(text);
+int32_t get_res(int fd) {
 
-    if (len > MAX_MSG_LEN) {
-        std::cerr << "Message too long for protocol" << std::endl;
-        return -1;
-    }
-
-    // Send request
-    char wbuf[4 + MAX_MSG_LEN];
-
-    memcpy(wbuf, &len, 4);
-    memcpy(&wbuf[4], text, len);
-
-    if (int32_t err = write_all(fd, wbuf, 4 + len)) {
-        return err;
-    }
+    uint32_t len = 0;
 
     // 4 bytes header
     char rbuf[4 + MAX_MSG_LEN];
@@ -52,7 +38,21 @@ int32_t query(int fd, const char *text) {
     }
 
     // Reply body
-    err = read_full(fd, &rbuf[4], len);
+    char status_buf[4];
+    uint32_t status_code = 0;
+    err = read_full(fd, status_buf, 4);
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading status code from conn")
+                  << std::endl;
+        return err;
+    }
+
+    memcpy(&status_code, status_buf, 4); // assume little endian
+
+    std::cout << "Status code: " << status_code << std::endl;
+
+    err = read_full(fd, &rbuf[8], len - 4); // len include size of status code
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading message from conn")
@@ -61,12 +61,46 @@ int32_t query(int fd, const char *text) {
     }
 
     std::cout << "Server message length: " << len << std::endl;
-    std::cout << "Server message recieved: " << std::string(rbuf + 4, len)
+    std::cout << "Server message recieved: " << std::string(rbuf + 8, len - 4)
               << std::endl;
     return 0;
 }
 
+int32_t send_req_cmd(int fd, std::vector<std::string> cmd) {
+    uint32_t len = 4;
+    for (const std::string &s : cmd) {
+        len += 4 + s.size();
+    }
+    if (len > MAX_MSG_LEN) {
+        return -1;
+    }
 
+    char wbuf[4 + MAX_MSG_LEN];
+
+    // write full msg size
+    memcpy(&wbuf[0], &len, 4);  // assume little endian
+
+    // write no. of strings
+    uint32_t n = cmd.size();
+    memcpy(&wbuf[4], &n, 4);
+
+    // for each str in cmd
+    // write size(str)
+    // write str
+    size_t cur = 8;
+    for (const std::string &s : cmd) {
+        uint32_t p = (uint32_t)s.size();
+        memcpy(&wbuf[cur], &p, 4);
+        memcpy(&wbuf[cur + 4], s.data(), s.size());
+        cur += 4 + s.size();
+    }
+
+    if (int32_t err = write_all(fd, wbuf, 4 + len)) {
+        return err;
+    }
+
+    return 0;
+}
 
 int main(void) {
 
@@ -99,28 +133,19 @@ int main(void) {
     }
 
     std::vector<std::string> query_list = {
-        "hello1",
-        "hello2",
-        "hello3",
+        "get",
+        "key"
     };
 
-    for (const std::string &s : query_list) {
-        int32_t err = query(s_fd, s.data());
-        if (err) {
-            std::cerr << "Unable to send data to Server" << std::endl;
-            return EXIT_FAILURE;
-        }
-    }
-
-    int32_t err = query(s_fd, "Hello");
+    int32_t err = send_req_cmd(s_fd, query_list);
     if (err) {
         std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;
     }
 
-    err = query(s_fd, "World!");
+    err = get_res(s_fd);
     if (err) {
-        std::cerr << "Unable to send data to Server" << std::endl;
+        std::cerr << "Unable to get data from Server" << std::endl;
         return EXIT_FAILURE;
     }
 

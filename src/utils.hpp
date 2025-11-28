@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <iostream>
 
+enum resp_status_code { OK, RES_NX, RES_ERR };
+
 int32_t read_full(int fd, char *buf, size_t n) {
 
     while (n > 0) {
