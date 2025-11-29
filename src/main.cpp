@@ -5,6 +5,7 @@
 #include <map>
 #include <vector>
 
+#include "hashtable.hpp"
 #include "utils.hpp"
 #include <arpa/inet.h>
 #include <poll.h>
@@ -36,10 +37,93 @@ struct Response {
     std::vector<uint8_t> data;
 };
 
-// mock KV store
-std::map<std::string, std::string> g_data;
+// ---------------- KV Store Func ----------------
 
-// Helper Functions
+// KV store
+struct {
+    HMap db;
+} g_data;
+
+// KV pair for the top-level hashtable
+struct Entry {
+    struct HNode node; // hashtable node
+    std::string key;
+    std::string val;
+};
+
+bool entry_eq(HNode *lhs, HNode *rhs) {
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
+    return le->key == re->key;
+}
+
+// FNV hash
+uint64_t str_hash(const uint8_t *data, size_t len) {
+    uint32_t h = 0x811C9DC5;
+    for (size_t i = 0; i < len; i++) {
+        h = (h + data[i]) * 0x01000193;
+    }
+    return h;
+}
+
+void do_get(std::vector<std::string> &cmd, Response &out) {
+    // sample Entry for lookup
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    // hashtable lookup
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (!node) {
+        out.status = RES_NX;
+        return;
+    }
+
+    // copy value to resp
+    const std::string &val = container_of(node, Entry, node)->val;
+    assert(val.size() <= MAX_MSG_LEN);
+    out.data.assign(val.begin(), val.end());
+}
+
+void do_set(std::vector<std::string> &cmd, Response &out) {
+    // sample Entry for lookup
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    // hashtable lookup
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (node) {
+        container_of(node, Entry, node)->val.swap(cmd[2]);
+    } else {
+        // not found, allocate and insert new entry
+        Entry *ent = new Entry();
+
+        ent->key.swap(key.key);
+        ent->node.hcode = key.node.hcode;
+        ent->val.swap(cmd[2]);
+
+        hm_insert(&g_data.db, &ent->node);
+    }
+}
+
+void do_del(std::vector<std::string> &cmd, Response &resp) {
+    // sample Entry for lookup
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    // hashtable lookup
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    // hashtable delete
+    node = hm_delete(&g_data.db, &key.node, &entry_eq);
+    if (node) { // deallocate the pair
+        delete container_of(node, Entry, node);
+    }
+}
+
+// ---------------- Helper Functions ----------------
 
 void buf_append(std::vector<uint8_t> &buf, const uint8_t *data, size_t len) {
     buf.insert(buf.end(), data, data + len);
@@ -109,18 +193,11 @@ bool parse_req(const uint8_t *data, size_t len, std::vector<std::string> &cmd) {
 
 void do_request(std::vector<std::string> &cmd, Response &out) {
     if (cmd.size() == 2 && cmd[0] == "get") {
-        auto it = g_data.find(cmd[1]);
-        if (it == g_data.end()) {
-            out.status = RES_NX; // val not found
-            return;
-        }
-
-        const std::string &val = it->second;
-        out.data.assign(val.begin(), val.end());
+        return do_get(cmd, out);
     } else if (cmd.size() == 3 && cmd[0] == "set") {
-        g_data[cmd[1]].swap(cmd[2]);
+        return do_set(cmd, out);
     } else if (cmd.size() == 2 && cmd[0] == "del") {
-        g_data.erase(cmd[1]);
+        return do_del(cmd, out);
     } else {
         out.status = RES_ERR; // unrecognized command
     }
@@ -137,6 +214,10 @@ void make_response(const Response &resp, std::vector<uint8_t> &out) {
         [n bytes]   response
 
     */
+
+    // +--------+---------+
+    // | status | data... |
+    // +--------+---------+
 
     uint32_t resp_len = 4 + (uint32_t)resp.data.size();
 
@@ -180,6 +261,10 @@ bool try_handling_request(Conn *conn) {
         [data]      (data)
 
     */
+
+    // +------+-----+------+-----+------+-----+-----+------+
+    // | nstr | len | str1 | len | str2 | ... | len | strn |
+    // +------+-----+------+-----+------+-----+-----+------+
 
     // process the messsage
 
@@ -238,7 +323,6 @@ bool try_handling_request(Conn *conn) {
     }
     std::cout << std::endl;
 
-    
     struct Response resp;
     do_request(cmd, resp);
     make_response(resp, conn->outgoing);
