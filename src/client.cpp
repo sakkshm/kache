@@ -14,15 +14,63 @@
 
 #define MAX_MSG_LEN 4069
 
+void handle_str(int fd, char *rbuf, size_t &cursor) {
+    // data len
+    uint32_t data_len = 0;
+    int err = read_full(fd, &rbuf[cursor], 4);
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading Data len from conn")
+                  << std::endl;
+        return;
+    }
+
+    memcpy(&data_len, &rbuf[cursor], 4); // assume little endian
+    cursor += 4;
+
+    std::cout << "Data length: " << data_len << std::endl;
+
+    err = read_full(fd, &rbuf[cursor], data_len);
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading message from conn")
+                  << std::endl;
+        return;
+    }
+
+    std::cout << "Server message recieved: "
+              << std::string(&rbuf[cursor], data_len) << std::endl;
+    cursor += data_len;
+}
+
+void handle_int(int fd, char *rbuf, size_t &cursor) {
+    int err = read_full(fd, &rbuf[cursor], 8);
+    int64_t resp_int = 0;
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading message from conn")
+                  << std::endl;
+        return;
+    }
+
+    memcpy(&resp_int, &rbuf[cursor], 8);
+
+    std::cout << "Server message recieved (integer): " << resp_int << std::endl;
+    cursor += 8;
+}
+
 int32_t get_res(int fd) {
 
     uint32_t len = 0;
 
-    // 4 bytes header
+    // Read buffer
     char rbuf[4 + MAX_MSG_LEN];
+    size_t cursor = 0;
     errno = 0;
 
-    int32_t err = read_full(fd, rbuf, 4);
+    // Read resp. length
+    int32_t err = read_full(fd, &rbuf[cursor], 4);
+
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading msg_size from conn")
@@ -30,17 +78,20 @@ int32_t get_res(int fd) {
         return err;
     }
 
-    memcpy(&len, rbuf, 4); // assume little endian
+    memcpy(&len, &rbuf[cursor], 4); // assume little endian
+    cursor += 4;
 
     if (len > MAX_MSG_LEN) {
         std::cerr << "Message too long from conn" << std::endl;
         return -1;
     }
 
-    // Reply body
-    char status_buf[4];
+    std::cout << "Server response length: " << len << std::endl;
+
+    // Resp body
+    // Read status code
     uint32_t status_code = 0;
-    err = read_full(fd, status_buf, 4);
+    err = read_full(fd, &rbuf[cursor], 4);
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading status code from conn")
@@ -48,21 +99,44 @@ int32_t get_res(int fd) {
         return err;
     }
 
-    memcpy(&status_code, status_buf, 4); // assume little endian
+    memcpy(&status_code, &rbuf[cursor], 4); // assume little endian
+    cursor += 4;
 
     std::cout << "Status code: " << status_code << std::endl;
 
-    err = read_full(fd, &rbuf[8], len - 4); // len include size of status code
+    // read tag
+    uint8_t resp_tag = 0;
+    err = read_full(fd, &rbuf[cursor], 1);
+
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
-                                 : "Error reading message from conn")
+                                 : "Error reading response tag from conn")
                   << std::endl;
         return err;
     }
 
-    std::cout << "Server message length: " << len << std::endl;
-    std::cout << "Server message recieved: " << std::string(rbuf + 8, len - 4)
-              << std::endl;
+    memcpy(&resp_tag, &rbuf[cursor], 1); // assume little endian
+    cursor += 1;
+
+    std::cout << "Response tag: " << int(resp_tag) << std::endl;
+
+    switch (resp_tag) {
+    case TAG_NIL:
+        std::cout << "Output is NULL" << std::endl;
+        break;
+
+    case TAG_INT:
+        handle_int(fd, rbuf, cursor);
+        break;
+
+    case TAG_STR:
+        handle_str(fd, rbuf, cursor);
+        break;
+
+    default:
+        break;
+    }
+
     return 0;
 }
 
@@ -78,7 +152,7 @@ int32_t send_req_cmd(int fd, std::vector<std::string> cmd) {
     char wbuf[4 + MAX_MSG_LEN];
 
     // write full msg size
-    memcpy(&wbuf[0], &len, 4);  // assume little endian
+    memcpy(&wbuf[0], &len, 4); // assume little endian
 
     // write no. of strings
     uint32_t n = cmd.size();
@@ -129,15 +203,18 @@ int main(void) {
         std::cerr << "Unable to connect socket to server" << std::endl;
         return EXIT_FAILURE;
     } else {
-        std::cout << "Socket successfully connected to server!" << std::endl;
+        std::cout << "Socket successfully connected to server!\n" << std::endl;
     }
 
-    std::vector<std::string> query_list = {
-        "get",
-        "key"
-    };
+    std::vector<std::string> cmd = {"get", "key"};
 
-    int32_t err = send_req_cmd(s_fd, query_list);
+    std::cout << "Sending command: ";
+    for (auto c : cmd) {
+        std::cout << c << " ";
+    }
+    std::cout << "\n" << std::endl;
+
+    int32_t err = send_req_cmd(s_fd, cmd);
     if (err) {
         std::cerr << "Unable to send data to Server" << std::endl;
         return EXIT_FAILURE;

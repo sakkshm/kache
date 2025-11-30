@@ -7,6 +7,7 @@
 
 #include "hashtable.hpp"
 #include "utils.hpp"
+
 #include <arpa/inet.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -76,13 +77,13 @@ void do_get(std::vector<std::string> &cmd, Response &out) {
     HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
     if (!node) {
         out.status = RES_NX;
-        return;
+        return out_nil(out.data);
     }
 
     // copy value to resp
     const std::string &val = container_of(node, Entry, node)->val;
     assert(val.size() <= MAX_MSG_LEN);
-    out.data.assign(val.begin(), val.end());
+    return out_str(out.data, val.data(), val.size());
 }
 
 void do_set(std::vector<std::string> &cmd, Response &out) {
@@ -105,9 +106,11 @@ void do_set(std::vector<std::string> &cmd, Response &out) {
 
         hm_insert(&g_data.db, &ent->node);
     }
+
+    return out_nil(out.data);
 }
 
-void do_del(std::vector<std::string> &cmd, Response &resp) {
+void do_del(std::vector<std::string> &cmd, Response &out) {
     // sample Entry for lookup
     Entry key;
     key.key.swap(cmd[1]);
@@ -120,41 +123,14 @@ void do_del(std::vector<std::string> &cmd, Response &resp) {
     node = hm_delete(&g_data.db, &key.node, &entry_eq);
     if (node) { // deallocate the pair
         delete container_of(node, Entry, node);
+    } else {
+        out.status = RES_NX;
     }
+
+    return out_int(out.data, node ? 1 : 0);
 }
 
 // ---------------- Helper Functions ----------------
-
-void buf_append(std::vector<uint8_t> &buf, const uint8_t *data, size_t len) {
-    buf.insert(buf.end(), data, data + len);
-}
-
-void buf_consume(std::vector<uint8_t> &buf, size_t n) {
-    buf.erase(buf.begin(), buf.begin() + n);
-}
-
-bool read_u32(const uint8_t *&curr, const uint8_t *end, uint32_t &out) {
-    if (curr + 4 > end) {
-        return false;
-    }
-
-    memcpy(&out, curr, 4);
-    curr += 4;
-
-    return true;
-}
-
-bool read_str(const uint8_t *&curr, const uint8_t *end, size_t n,
-              std::string &out) {
-    if (curr + n > end) {
-        return false;
-    }
-
-    out.assign(curr, curr + n);
-    curr += n;
-
-    return true;
-}
 
 // Request Handler function
 
@@ -211,13 +187,23 @@ void make_response(const Response &resp, std::vector<uint8_t> &out) {
 
         [4 bytes]   resp len
         [4 bytes]   status code
-        [n bytes]   response
+        [n bytes]   response/data
 
     */
 
     // +--------+---------+
     // | status | data... |
     // +--------+---------+
+
+    // Data is TAG-LEN-VAL
+
+    // Tag      1 byte
+    // len      4 bytes
+    // value    n bytes
+
+    // +--------+---------+---------+
+    // | TAG    | len...  |  value  |
+    // +--------+---------+---------+
 
     uint32_t resp_len = 4 + (uint32_t)resp.data.size();
 
@@ -321,7 +307,6 @@ bool try_handling_request(Conn *conn) {
     for (auto c : cmd) {
         std::cout << c << " ";
     }
-    std::cout << std::endl;
 
     struct Response resp;
     do_request(cmd, resp);
