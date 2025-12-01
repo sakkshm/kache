@@ -83,7 +83,7 @@ void do_get(std::vector<std::string> &cmd, Response &out) {
     // copy value to resp
     const std::string &val = container_of(node, Entry, node)->val;
     assert(val.size() <= MAX_MSG_LEN);
-    return out_str(out.data, val.data(), val.size());
+    out_str(out.data, val.data(), val.size());
 }
 
 void do_set(std::vector<std::string> &cmd, Response &out) {
@@ -107,7 +107,7 @@ void do_set(std::vector<std::string> &cmd, Response &out) {
         hm_insert(&g_data.db, &ent->node);
     }
 
-    return out_nil(out.data);
+    out_nil(out.data);
 }
 
 void do_del(std::vector<std::string> &cmd, Response &out) {
@@ -127,7 +127,7 @@ void do_del(std::vector<std::string> &cmd, Response &out) {
         out.status = RES_NX;
     }
 
-    return out_int(out.data, node ? 1 : 0);
+    out_int(out.data, node ? 1 : 0);
 }
 
 // ---------------- Helper Functions ----------------
@@ -290,9 +290,9 @@ bool try_handling_request(Conn *conn) {
         return false; // want read
     }
 
-    // raw message content
-    std::string msg(conn->incoming.begin(), conn->incoming.end());
-    std::cout << "Raw Message content: " << msg << std::endl;
+    // // raw message content
+    // std::string msg(conn->incoming.begin(), conn->incoming.end());
+    // std::cout << "Raw Message content: " << msg << std::endl;
 
     const uint8_t *request = &conn->incoming[4];
 
@@ -499,6 +499,8 @@ int main(void) {
         }
 
         // handle the main listening socket
+        // when a client is waiting in the kernel accept queue 
+        // POLLIN event is triggered
         if (poll_args[0].revents) {
             if (Conn *conn = handle_accept(s_fd)) {
                 // put client connection into the map
@@ -510,6 +512,7 @@ int main(void) {
         }
 
         // handle connection sockets
+        // skip first
         for (size_t i = 1; i < poll_args.size(); ++i) {
             uint32_t ready = poll_args[i].revents;
             Conn *conn = fd_to_conn[poll_args[i].fd];

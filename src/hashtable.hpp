@@ -83,6 +83,18 @@ HNode *h_detach(HTab *htab, HNode **from) {
     return node;
 }
 
+bool h_foreach(HTab *htab, bool (*f)(HNode *, void *), void* arg){
+    for(size_t i = 0; i <= htab -> mask; i++){
+        for(HNode *node = htab->tab[i]; node != NULL; node = node -> next){
+            if(!f(node, arg)){
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 // HMap methods
 
 // Normally, newer is used and older is unused
@@ -165,6 +177,11 @@ void hm_clear(HMap *hmap) {
     free(hmap->newer.tab);
     free(hmap->older.tab);
     *hmap = HMap{};
+}
+
+void hm_foreach(HMap *hmap, bool (*f)(HNode *, void *), void *arg){
+    h_foreach(&hmap->newer, f, arg);
+    h_foreach(&hmap->older, f, arg);
 }
 
 size_t hm_size(HMap *hmap) {
