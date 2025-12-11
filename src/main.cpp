@@ -308,6 +308,8 @@ bool try_handling_request(Conn *conn) {
         std::cout << c << " ";
     }
 
+    std::cout << std::endl;
+
     struct Response resp;
     do_request(cmd, resp);
     make_response(resp, conn->outgoing);
@@ -499,7 +501,7 @@ int main(void) {
         }
 
         // handle the main listening socket
-        // when a client is waiting in the kernel accept queue 
+        // when a client is waiting in the kernel accept queue
         // POLLIN event is triggered
         if (poll_args[0].revents) {
             if (Conn *conn = handle_accept(s_fd)) {
