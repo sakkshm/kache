@@ -71,6 +71,8 @@ int32_t get_res(int fd) {
     // Read resp. length
     int32_t err = read_full(fd, &rbuf[cursor], 4);
 
+    std::cout << "========================================" << std::endl;
+
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading msg_size from conn")
@@ -136,6 +138,8 @@ int32_t get_res(int fd) {
     default:
         break;
     }
+
+    std::cout << "========================================" << std::endl;
 
     return 0;
 }
@@ -203,27 +207,35 @@ int main(void) {
         std::cerr << "Unable to connect socket to server" << std::endl;
         return EXIT_FAILURE;
     } else {
-        std::cout << "Socket successfully connected to server!\n" << std::endl;
+        std::cout << "Socket successfully connected to server!" << std::endl;
     }
 
-    std::vector<std::string> cmd = {"get", "key"};
+    std::cout << "========================================" << std::endl;
 
-    std::cout << "Sending command: ";
-    for (auto c : cmd) {
-        std::cout << c << " ";
+    std::vector<std::vector<std::string>> cmd_list = {{"set", "key", "value"},
+                                                      {"get", "key"}};
+
+    for (auto cmd : cmd_list) {
+        std::cout << "Sending command: ";
+        for (auto c : cmd) {
+            std::cout << c << " ";
+        }
+
+        std::cout << std::endl;
+
+        int32_t err = send_req_cmd(s_fd, cmd);
+        if (err) {
+            std::cerr << "Unable to send data to Server" << std::endl;
+            return EXIT_FAILURE;
+        }
     }
-    std::cout << "\n" << std::endl;
 
-    int32_t err = send_req_cmd(s_fd, cmd);
-    if (err) {
-        std::cerr << "Unable to send data to Server" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    err = get_res(s_fd);
-    if (err) {
-        std::cerr << "Unable to get data from Server" << std::endl;
-        return EXIT_FAILURE;
+    while (true) {
+        int32_t err = get_res(s_fd);
+        if (err) {
+            std::cerr << "Unable to get data from Server" << std::endl;
+            return EXIT_FAILURE;
+        }
     }
 
     return EXIT_SUCCESS;
