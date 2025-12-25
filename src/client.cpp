@@ -14,7 +14,7 @@
 
 #define MAX_MSG_LEN 4069
 
-void handle_str(int fd, char *rbuf, size_t &cursor) {
+std::string handle_str(int fd, char *rbuf, size_t &cursor) {
     // data len
     uint32_t data_len = 0;
     int err = read_full(fd, &rbuf[cursor], 4);
@@ -22,7 +22,7 @@ void handle_str(int fd, char *rbuf, size_t &cursor) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading Data len from conn")
                   << std::endl;
-        return;
+        return "";
     }
 
     memcpy(&data_len, &rbuf[cursor], 4); // assume little endian
@@ -35,17 +35,58 @@ void handle_str(int fd, char *rbuf, size_t &cursor) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading message from conn")
                   << std::endl;
-        return;
+        return "";
     }
 
-    std::cout << "Server message recieved: "
-              << std::string(&rbuf[cursor], data_len) << std::endl;
+    std::string str = std::string(&rbuf[cursor], data_len);
+
+    std::cout << "Server message recieved: " << str << std::endl;
     cursor += data_len;
+
+    return str;
 }
 
-void handle_int(int fd, char *rbuf, size_t &cursor) {
+int64_t handle_int(int fd, char *rbuf, size_t &cursor) {
     int err = read_full(fd, &rbuf[cursor], 8);
     int64_t resp_int = 0;
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading message from conn")
+                  << std::endl;
+        return 0;
+    }
+
+    memcpy(&resp_int, &rbuf[cursor], 8);
+
+    std::cout << "Server message recieved (integer): " << resp_int << std::endl;
+    cursor += 8;
+
+    return resp_int;
+}
+
+double handle_dbl(int fd, char *rbuf, size_t &cursor) {
+    int err = read_full(fd, &rbuf[cursor], 8);
+    double resp_dbl = 0;
+    if (err) {
+        std::cerr << (errno == 0 ? "EOF reading from conn"
+                                 : "Error reading message from conn")
+                  << std::endl;
+        return 0;
+    }
+
+    memcpy(&resp_dbl, &rbuf[cursor], 8);
+
+    std::cout << "Server message recieved (double): " << resp_dbl << std::endl;
+    cursor += 8;
+
+    return resp_dbl;
+}
+
+void handle_arr(int fd, char *rbuf, size_t &cursor) {
+
+    // read arr len
+    int err = read_full(fd, &rbuf[cursor], 4);
+    uint32_t arr_len = 0;
     if (err) {
         std::cerr << (errno == 0 ? "EOF reading from conn"
                                  : "Error reading message from conn")
@@ -53,10 +94,50 @@ void handle_int(int fd, char *rbuf, size_t &cursor) {
         return;
     }
 
-    memcpy(&resp_int, &rbuf[cursor], 8);
+    memcpy(&arr_len, &rbuf[cursor], 4);
 
-    std::cout << "Server message recieved (integer): " << resp_int << std::endl;
+    std::cout << "Server message recieved (array), Length: " << arr_len
+              << std::endl;
     cursor += 8;
+
+    for (uint32_t idx = 0; idx < arr_len; idx++) {
+        // read tag
+        uint8_t resp_tag = 0;
+        err = read_full(fd, &rbuf[cursor], 1);
+
+        if (err) {
+            std::cerr << (errno == 0 ? "EOF reading from conn"
+                                     : "Error reading response tag from conn")
+                      << std::endl;
+            return;
+        }
+
+        memcpy(&resp_tag, &rbuf[cursor], 1); // assume little endian
+        cursor += 1;
+
+        std::cout << "Response tag: " << int(resp_tag) << std::endl;
+
+        switch (resp_tag) {
+        case TAG_NIL:
+            std::cout << "Output is NULL" << std::endl;
+            break;
+
+        case TAG_INT:
+            handle_int(fd, rbuf, cursor);
+            break;
+
+        case TAG_STR:
+            handle_str(fd, rbuf, cursor);
+            break;
+
+        case TAG_DBL:
+            handle_dbl(fd, rbuf, cursor);
+            break;
+
+        default:
+            break;
+        }
+    }
 }
 
 int32_t get_res(int fd) {
@@ -106,6 +187,38 @@ int32_t get_res(int fd) {
 
     std::cout << "Status code: " << status_code << std::endl;
 
+    // check status codes
+    if (status_code != OK) {
+
+        switch (status_code) {
+        case UNKNOWN_CMD:
+            std::cout << "UNKNOWN_CMD: Unknown command found" << std::endl;
+            break;
+
+        case RES_NX:
+            std::cout << "RES_NX: Entry not found" << std::endl;
+            break;
+
+        case RES_ERR:
+            std::cout << "RES_ERR: Error in generating response" << std::endl;
+            break;
+
+        case ERR_BAD_ARG:
+            std::cout << "ERR_BAD_ARG: Bad Arguments" << std::endl;
+            break;
+
+        case ERR_BAD_TYPE:
+            std::cout << "ERR_BAD_TYPE: Wrong type for this action"
+                      << std::endl;
+            break;
+
+        default:
+            break;
+        }
+
+        return -1;
+    }
+
     // read tag
     uint8_t resp_tag = 0;
     err = read_full(fd, &rbuf[cursor], 1);
@@ -133,6 +246,14 @@ int32_t get_res(int fd) {
 
     case TAG_STR:
         handle_str(fd, rbuf, cursor);
+        break;
+
+    case TAG_DBL:
+        handle_dbl(fd, rbuf, cursor);
+        break;
+
+    case TAG_ARR:
+        handle_arr(fd, rbuf, cursor);
         break;
 
     default:
@@ -212,8 +333,17 @@ int main(void) {
 
     std::cout << "========================================" << std::endl;
 
-    std::vector<std::vector<std::string>> cmd_list = {{"set", "key", "value"},
-                                                      {"get", "key"}};
+    std::vector<std::vector<std::string>> cmd_list = {
+        {"zadd", "zset", "10.7", "saksham"},
+        {"zadd", "zset", "11.7", "saksham2"},
+        {"zadd", "zset", "4.7", "saksham7"},
+        {"zadd", "zset", "14.7", "saksham4"},
+        {"zadd", "zset", "15.7", "saksham5"},
+        {"zadd", "zset", "13.7", "saksham3"},
+        {"zadd", "zset", "3.7", "saksham6"},
+        {"zadd", "zset", "5.7", "saksham8"},
+        {"zscore", "zset", "saksham"},
+        {"zquery", "zset", "11.7", "saksham2", "2", "10"}};
 
     for (auto cmd : cmd_list) {
         std::cout << "Sending command: ";
