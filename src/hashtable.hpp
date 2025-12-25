@@ -27,6 +27,13 @@ struct HMap {
     size_t migrate_pos = 0;
 };
 
+// Helper for hashtable key compare
+struct HKey {
+    HNode node;
+    const char *name = NULL;
+    size_t len = 0;
+};
+
 const size_t k_max_load_factor = 8;
 const size_t k_rehashing_work = 128; // constant work
 

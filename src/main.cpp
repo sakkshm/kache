@@ -7,6 +7,7 @@
 
 #include "hashtable.hpp"
 #include "utils.hpp"
+#include "zset.hpp"
 
 #include <arpa/inet.h>
 #include <poll.h>
@@ -45,11 +46,25 @@ struct {
     HMap db;
 } g_data;
 
+// Value types
+// TODO: add support for list, hash, set
+enum {
+    T_INIT = 0,
+    T_STR = 1,  // string
+    T_ZSET = 2, // sorted set
+};
+
 // KV pair for the top-level hashtable
 struct Entry {
     struct HNode node; // hashtable node
     std::string key;
+
+    // type
+    uint32_t type = T_INIT;
+
+    // either str or Zset
     std::string val;
+    ZSet zset;
 };
 
 bool entry_eq(HNode *lhs, HNode *rhs) {
@@ -58,13 +73,17 @@ bool entry_eq(HNode *lhs, HNode *rhs) {
     return le->key == re->key;
 }
 
-// FNV hash
-uint64_t str_hash(const uint8_t *data, size_t len) {
-    uint32_t h = 0x811C9DC5;
-    for (size_t i = 0; i < len; i++) {
-        h = (h + data[i]) * 0x01000193;
+Entry *entry_new(uint32_t type) {
+    Entry *ent = new Entry();
+    ent->type = type;
+    return ent;
+}
+
+void entry_del(Entry *ent) {
+    if (ent->type == T_ZSET) {
+        zset_clear(&ent->zset);
     }
-    return h;
+    delete ent;
 }
 
 void do_get(std::vector<std::string> &cmd, Response &out) {
@@ -94,17 +113,17 @@ void do_set(std::vector<std::string> &cmd, Response &out) {
 
     // hashtable lookup
     HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
-    if (node) {
-        container_of(node, Entry, node)->val.swap(cmd[2]);
-    } else {
+    if (!node) {
         // not found, allocate and insert new entry
-        Entry *ent = new Entry();
+        Entry *ent = entry_new(T_STR);
 
         ent->key.swap(key.key);
         ent->node.hcode = key.node.hcode;
         ent->val.swap(cmd[2]);
 
         hm_insert(&g_data.db, &ent->node);
+    } else {
+        container_of(node, Entry, node)->val.swap(cmd[2]);
     }
 
     out_nil(out.data);
@@ -122,12 +141,175 @@ void do_del(std::vector<std::string> &cmd, Response &out) {
     // hashtable delete
     node = hm_delete(&g_data.db, &key.node, &entry_eq);
     if (node) { // deallocate the pair
-        delete container_of(node, Entry, node);
+        entry_del(container_of(node, Entry, node));
     } else {
         out.status = RES_NX;
     }
 
     out_int(out.data, node ? 1 : 0);
+}
+
+void do_zadd(std::vector<std::string> &cmd, Response &out) {
+    // command: zadd <key> <score> <name>
+    double score = 0;
+    if (!str_to_dbl(cmd[2], score)) {
+        out.status = ERR_BAD_ARG;
+        return out_nil(out.data);
+    }
+
+    // lookup or create zset
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    Entry *ent = NULL;
+    if (!hnode) {
+        // insert new key
+        ent = entry_new(T_ZSET);
+
+        ent->key.swap(key.key);
+        ent->node.hcode = key.node.hcode;
+
+        hm_insert(&g_data.db, &ent->node);
+    } else {
+        ent = container_of(hnode, Entry, node);
+        if (ent->type != T_ZSET) {
+            out.status = ERR_BAD_TYPE;
+            return out_nil(out.data);
+        }
+    }
+
+    // add or update the tuple
+    const std::string &name = cmd[3];
+    zset_insert(&ent->zset, name.data(), name.size(), score);
+
+    return out_nil(out.data);
+}
+
+void do_zrem(std::vector<std::string> &cmd, Response &out) {
+    // command: zrem <key> <name>
+
+    // lookup zset
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    Entry *ent;
+    if (!hnode) {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    } else {
+        ent = container_of(hnode, Entry, node);
+        if (ent->type != T_ZSET) {
+            out.status = ERR_BAD_TYPE;
+            return out_nil(out.data);
+        }
+    }
+
+    const std::string &name = cmd[2];
+    ZNode *znode = zset_lookup(&ent->zset, name.data(), name.size());
+    if (znode) {
+        zset_delete(&ent->zset, znode);
+        return out_int(out.data, znode ? 1 : 0);
+    } else {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    }
+}
+
+void do_zscore(std::vector<std::string> &cmd, Response &out) {
+    // command: zscore <key> <name>
+
+    // lookup zset
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    Entry *ent;
+    if (!hnode) {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    } else {
+        ent = container_of(hnode, Entry, node);
+        if (ent->type != T_ZSET) {
+            out.status = ERR_BAD_TYPE;
+            return out_nil(out.data);
+        }
+    }
+
+    const std::string &name = cmd[2];
+    ZNode *znode = zset_lookup(&ent->zset, name.data(), name.size());
+    if (znode) {
+        return out_dbl(out.data, znode->score);
+    } else {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    }
+}
+
+void do_zquery(std::vector<std::string> &cmd, Response &out) {
+    // command: zquery <key> <score> <name> <offset> <limit>
+
+    double score = 0;
+    if (!str_to_dbl(cmd[2], score)) {
+        out.status = ERR_BAD_ARG;
+        return out_nil(out.data);
+    }
+
+    const std::string &name = cmd[3];
+
+    int64_t offset = 0, limit = 0;
+    if (!str_to_i64(cmd[4], offset) || !str_to_i64(cmd[5], limit)) {
+        out.status = ERR_BAD_ARG;
+        return out_nil(out.data);
+    }
+
+    // lookup zset
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    Entry *ent;
+    if (!hnode) {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    } else {
+        ent = container_of(hnode, Entry, node);
+        if (ent->type != T_ZSET) {
+            out.status = ERR_BAD_TYPE;
+            return out_nil(out.data);
+        }
+    }
+
+    if (limit <= 0) {
+        out_arr_begin(out.data);
+        return;
+    }
+
+    // seek to the key
+    ZNode *znode = zset_seek(&ent->zset, score, name.data(), name.size());
+    znode = znode_offset(znode, offset);
+
+    // output
+    size_t cursor = out_arr_begin(out.data);
+    int64_t n = 0;
+
+    while (znode && n < limit) {
+        out_str(out.data, znode->name, znode->len);
+        out_dbl(out.data, znode->score);
+        znode = znode_offset(znode, +1);
+        n += 2;
+    }
+
+    out_arr_end(out.data, cursor, (uint32_t)n);
 }
 
 // ---------------- Helper Functions ----------------
@@ -167,6 +349,25 @@ bool parse_req(const uint8_t *data, size_t len, std::vector<std::string> &cmd) {
     return true;
 }
 
+/*
+
+Command List:
+    Hashmap commands:
+
+    - set <key> <value> : Set value in HMap
+    - get <key>         : Get Value for key
+    - del <key>         : Delete key-value
+
+    ZSet Commands:
+
+    - zadd <key> <score> <name> : Add (name, score) to Zset of name key
+    - zrem <key> <name>         : Remove pair by name
+    - zscore <key> <name>       : Get score by name
+    - zquery <key> <score>
+      <name> <offset> <limit>   : Query ZSet
+
+*/
+
 void do_request(std::vector<std::string> &cmd, Response &out) {
     if (cmd.size() == 2 && cmd[0] == "get") {
         return do_get(cmd, out);
@@ -174,8 +375,16 @@ void do_request(std::vector<std::string> &cmd, Response &out) {
         return do_set(cmd, out);
     } else if (cmd.size() == 2 && cmd[0] == "del") {
         return do_del(cmd, out);
+    } else if (cmd.size() == 4 && cmd[0] == "zadd") {
+        return do_zadd(cmd, out);
+    } else if (cmd.size() == 3 && cmd[0] == "zrem") {
+        return do_zrem(cmd, out);
+    } else if (cmd.size() == 3 && cmd[0] == "zscore") {
+        return do_zscore(cmd, out);
+    } else if (cmd.size() == 6 && cmd[0] == "zquery") {
+        return do_zquery(cmd, out);
     } else {
-        out.status = RES_ERR; // unrecognized command
+        out.status = UNKNOWN_CMD;
     }
 }
 
@@ -191,9 +400,9 @@ void make_response(const Response &resp, std::vector<uint8_t> &out) {
 
     */
 
-    // +--------+---------+
-    // | status | data... |
-    // +--------+---------+
+    // +--------+--------+---------+
+    // |  len   | status | data... |
+    // +--------+--------+---------+
 
     // Data is TAG-LEN-VAL
 
@@ -441,6 +650,7 @@ int main(void) {
 
     if (bind(s_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         std::cerr << "Unable to bind socket to addr" << std::endl;
+        // std::cerr << "ERRNO: " << errrno << std::endl;
         return EXIT_FAILURE;
     } else {
         std::cout << "Socket bound successfully to addr!" << std::endl;
