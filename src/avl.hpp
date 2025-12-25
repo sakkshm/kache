@@ -26,6 +26,7 @@ uint32_t avl_cnt(AVLNode *node) { return node ? node->cnt : 0; }
 void avl_update(AVLNode *node) {
     node->height =
         1 + std::max(avl_height(node->left), avl_height(node->right));
+    node->cnt = 1 + avl_cnt(node->left) + avl_cnt(node->right);
 }
 
 AVLNode *rot_left(AVLNode *node) {
@@ -80,22 +81,26 @@ AVLNode *rot_right(AVLNode *node) {
 }
 
 AVLNode *avl_fix_left(AVLNode *node) {
-    if (avl_height(node->left->left) < avl_height(node->left->right)) {
-        // LR Rotation
+    if (!node || !node->left) return node;
+
+    // LR case
+    if (avl_height(node->left->right) > avl_height(node->left->left)) {
         node->left = rot_left(node->left);
     }
 
-    // LL Rotation
+    // LL case (or after LR rotation)
     return rot_right(node);
 }
 
 AVLNode *avl_fix_right(AVLNode *node) {
-    if (avl_height(node->left->left) > avl_height(node->left->right)) {
-        // RL Rotation
-        node->left = rot_right(node->right);
+    if (!node || !node->right) return node;
+
+    // RL case
+    if (avl_height(node->right->left) > avl_height(node->right->right)) {
+        node->right = rot_right(node->right);
     }
 
-    // RR Rotation
+    // RR case (or after RL rotation)
     return rot_left(node);
 }
 
@@ -195,4 +200,34 @@ AVLNode *avl_del(AVLNode *node) {
     *from = succ;
 
     return root;
+}
+
+AVLNode *avl_offset(AVLNode *node, int64_t offset) {
+    int64_t pos = 0;
+
+    while (offset != pos) {
+        if (pos < offset && pos + avl_cnt(node->right) >= offset) {
+            // target is in right subtree
+            node = node->right;
+            pos += avl_cnt(node->left) + 1;
+        } else if (pos > offset && pos - avl_cnt(node->left) <= offset) {
+            // target is in left subtree
+            node = node->left;
+            pos -= avl_cnt(node->right) + 1;
+        } else {
+            // go to parent
+            AVLNode *parent = node->parent;
+            if (!parent) {
+                return NULL;
+            }
+            if (parent->right == node) {
+                pos -= avl_cnt(node->left) + 1;
+            } else {
+                pos += avl_cnt(node->right) + 1;
+            }
+            node = parent;
+        }
+    }
+
+    return node;
 }
