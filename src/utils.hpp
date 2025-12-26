@@ -221,3 +221,12 @@ int str_to_i64(const std::string &s, int64_t &out) {
     return ec == std::errc{} && ptr == s.data() + s.size();
 }
 
+
+// ------------------- Timer Functions ------------------
+
+uint64_t get_monotonic_msec(){
+    struct timespec tv = {0, 0};
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return uint64_t(tv.tv_sec) * 1000 + tv.tv_nsec / 1'000'000;
+}
+
