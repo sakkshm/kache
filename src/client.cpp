@@ -334,16 +334,8 @@ int main(void) {
     std::cout << "========================================" << std::endl;
 
     std::vector<std::vector<std::string>> cmd_list = {
-        {"zadd", "zset", "10.7", "saksham"},
-        {"zadd", "zset", "11.7", "saksham2"},
-        {"zadd", "zset", "4.7", "saksham7"},
-        {"zadd", "zset", "14.7", "saksham4"},
-        {"zadd", "zset", "15.7", "saksham5"},
-        {"zadd", "zset", "13.7", "saksham3"},
-        {"zadd", "zset", "3.7", "saksham6"},
-        {"zadd", "zset", "5.7", "saksham8"},
-        {"zscore", "zset", "saksham"},
-        {"zquery", "zset", "11.7", "saksham2", "2", "10"}};
+        {"get", "key"},
+    };
 
     for (auto cmd : cmd_list) {
         std::cout << "Sending command: ";

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "hashtable.hpp"
+#include "heap.hpp"
 #include "list.hpp"
 #include "utils.hpp"
 #include "zset.hpp"
@@ -59,6 +60,9 @@ struct {
     // timers for idle connections
     DList idle_list;
 
+    // heap for entry TTL
+    std::vector<HeapItem> heap;
+
 } g_data;
 
 // Value types
@@ -73,6 +77,9 @@ enum {
 struct Entry {
     struct HNode node; // hashtable node
     std::string key;
+
+    // TTL
+    size_t heap_idx = -1; // arr ind to heap item
 
     // type
     uint32_t type = T_INIT;
@@ -94,10 +101,24 @@ Entry *entry_new(uint32_t type) {
     return ent;
 }
 
+void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
+    if (ttl_ms < 0 && ent->heap_idx != (size_t)-1) {
+        // setting a negative TTL means removing a TTL
+        heap_delete(g_data.heap, ent->heap_idx);
+        ent->heap_idx = -1;
+    } else if (ttl_ms >= 0) {
+        // add/update TTL heap
+        uint64_t expire_at = get_monotonic_msec() + (uint64_t)ttl_ms;
+        HeapItem item = {expire_at, &ent->heap_idx};
+        heap_upsert(g_data.heap, ent->heap_idx, item);
+    }
+}
+
 void entry_del(Entry *ent) {
     if (ent->type == T_ZSET) {
         zset_clear(&ent->zset);
     }
+    entry_set_ttl(ent, -1); // remove from TTL heap
     delete ent;
 }
 
@@ -169,6 +190,53 @@ void do_del(std::vector<std::string> &cmd, Response &out) {
     }
 
     out_int(out.data, node ? 1 : 0);
+}
+
+void do_expire(std::vector<std::string> &cmd, Response &out) {
+    // command: expire <key> <time>
+    int64_t ttl_ms = 0;
+    if (!str_to_i64(cmd[2], ttl_ms)) {
+        out.status = ERR_BAD_ARG;
+        return out_nil(out.data);
+    }
+
+    // lookup entry
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    if (hnode) {
+        Entry *ent = container_of(hnode, Entry, node);
+        entry_set_ttl(ent, ttl_ms);
+    } else {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    }
+
+    return out_nil(out.data);
+}
+
+void do_persist(std::vector<std::string> &cmd, Response &out) {
+    // command: persist <key>
+
+    // lookup entry
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+
+    if (hnode) {
+        Entry *ent = container_of(hnode, Entry, node);
+        entry_set_ttl(ent, -1);
+    } else {
+        out.status = RES_NX;
+        return out_nil(out.data);
+    }
+
+    return out_nil(out.data);
 }
 
 void do_zadd(std::vector<std::string> &cmd, Response &out) {
@@ -338,14 +406,24 @@ void do_zquery(std::vector<std::string> &cmd, Response &out) {
 
 // Timer Helper function
 int32_t next_timer_ms() {
-    if (dlist_empty(&g_data.idle_list)) {
-        // wait indefinitely
-        return -1;
+    uint64_t now_ms = get_monotonic_msec();
+    uint64_t next_ms = (uint64_t)-1;
+
+    // idle timers using a linked list
+    if (!dlist_empty(&g_data.idle_list)) {
+        Conn *conn = container_of(g_data.idle_list.next, Conn, idle_node);
+        next_ms = conn->last_active_ms + IDLE_TIMEOUT_MS;
     }
 
-    uint64_t now_ms = get_monotonic_msec();
-    Conn *conn = container_of(g_data.idle_list.next, Conn, idle_node);
-    uint64_t next_ms = conn->last_active_ms + IDLE_TIMEOUT_MS;
+    // TTL timers using a heap
+    if (!g_data.heap.empty() && g_data.heap[0].val < next_ms) {
+        next_ms = g_data.heap[0].val;
+    }
+
+    // timeout value
+    if (next_ms == (uint64_t)-1) {
+        return -1; // no timers, no timeouts
+    }
 
     if (next_ms <= now_ms) {
         // wait for 0ms, non-blocking
@@ -358,6 +436,7 @@ int32_t next_timer_ms() {
 void process_timers() {
     uint64_t now_ms = get_monotonic_msec();
 
+    // clear idle connections using linked list
     while (!dlist_empty(&g_data.idle_list)) {
         Conn *conn = container_of(g_data.idle_list.next, Conn, idle_node);
 
@@ -370,6 +449,16 @@ void process_timers() {
         std::cerr << "Removing idle connection: " << conn->fd << std::endl;
 
         conn_destroy(conn);
+    }
+
+    // evict entries using heap
+    const size_t k_max_works = 2000;
+    size_t nworks = 0;
+    while (!g_data.heap.empty() && g_data.heap[0].val < now_ms &&
+           nworks++ < k_max_works) {
+        Entry *ent = container_of(g_data.heap[0].ref, Entry, heap_idx);
+        hm_delete(&g_data.db, &ent->node, &entry_eq);
+        entry_del(ent); // delete the key
     }
 }
 
@@ -413,13 +502,16 @@ bool parse_req(const uint8_t *data, size_t len, std::vector<std::string> &cmd) {
 Command List:
     Hashmap commands:
 
-    - set <key> <value> : Set value in HMap
-    - get <key>         : Get Value for key
-    - del <key>         : Delete key-value
+    - set <key> <value>     : Set value in HMap
+    - get <key>             : Get Value for key
+    - del <key>             : Delete key-value
+    - expire <key> <time>   : Set TTL for key, time in ms
+    - persist <key>         : Remove TTL for key
 
     ZSet Commands:
 
-    - zadd <key> <score> <name> : Add (name, score) to Zset of name key
+    - zadd <key> <score> <name> : Add (name, score) to
+                                  Zset of name key
     - zrem <key> <name>         : Remove pair by name
     - zscore <key> <name>       : Get score by name
     - zquery <key> <score>
@@ -434,6 +526,10 @@ void do_request(std::vector<std::string> &cmd, Response &out) {
         return do_set(cmd, out);
     } else if (cmd.size() == 2 && cmd[0] == "del") {
         return do_del(cmd, out);
+    } else if (cmd.size() == 3 && cmd[0] == "expire") {
+        return do_expire(cmd, out);
+    } else if (cmd.size() == 2 && cmd[0] == "persist") {
+        return do_persist(cmd, out);
     } else if (cmd.size() == 4 && cmd[0] == "zadd") {
         return do_zadd(cmd, out);
     } else if (cmd.size() == 3 && cmd[0] == "zrem") {
@@ -730,7 +826,6 @@ int main(void) {
 
     // Initialise Global state, idle list
     dlist_init(&g_data.idle_list);
-
 
     // list for poll() readiness
     std::vector<struct pollfd> poll_args;
