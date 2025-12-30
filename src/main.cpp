@@ -8,6 +8,7 @@
 #include "hashtable.hpp"
 #include "heap.hpp"
 #include "list.hpp"
+#include "thread_pool.hpp"
 #include "utils.hpp"
 #include "zset.hpp"
 
@@ -63,6 +64,9 @@ struct {
     // heap for entry TTL
     std::vector<HeapItem> heap;
 
+    // thread pool
+    ThreadPool thread_pool;
+
 } g_data;
 
 // Value types
@@ -114,12 +118,27 @@ void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
     }
 }
 
-void entry_del(Entry *ent) {
+void entry_del_sync(Entry *ent) {
     if (ent->type == T_ZSET) {
         zset_clear(&ent->zset);
     }
-    entry_set_ttl(ent, -1); // remove from TTL heap
     delete ent;
+}
+
+void entry_del_func(void *arg) { entry_del_sync((Entry *)arg); }
+
+void entry_del(Entry *ent) {
+    entry_set_ttl(ent, -1); // remove from TTL heap
+
+    // run dectructor in thread pool for large data structures
+    size_t set_size = (ent->type == T_ZSET) ? hm_size(&ent->zset.hmap) : 0;
+    const size_t k_large_container_size = 1000;
+
+    if (set_size > k_large_container_size) {
+        thread_pool_queue(&g_data.thread_pool, &entry_del_func, ent);
+    } else {
+        entry_del_sync(ent); // small; avoid context switches
+    }
 }
 
 void conn_destroy(Conn *conn) {
@@ -824,8 +843,9 @@ int main(void) {
         std::cout << "Listening on " << ip_str << ":" << PORT_NO << std::endl;
     }
 
-    // Initialise Global state, idle list
+    // Initialise Global state
     dlist_init(&g_data.idle_list);
+    thread_pool_init(&g_data.thread_pool, 4);
 
     // list for poll() readiness
     std::vector<struct pollfd> poll_args;
