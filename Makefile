@@ -6,12 +6,7 @@ SRC := $(wildcard src/*.cpp)
 # main binary:
 TARGET := build/main
 
-all: $(TARGET)
-
-$(TARGET): $(SRC)
-	@mkdir -p build
-	@echo "Compiling single binary with all sources..."
-	$(CXX) $(CXXFLAGS) $^ -o $@
+all: each
 
 # Build each source file as its own binary
 each:
