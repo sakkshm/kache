@@ -4,6 +4,9 @@ A Redis-inspired **in-memory key-value store** implemented in C++. Built to expl
 
 Kache is written completely from scratch without external databases or frameworks. The goal is to understand **systems-level design choices**, **performance trade-offs**, and **internal mechanics** behind Redis-like systems.
 
+[Read my full blog post on Kache](https://sakkshm.me/blog/building-kache)
+
+
 ## Project Overview
 
 - Implements a minimal Redis-like TCP server
