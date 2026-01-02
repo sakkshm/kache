@@ -334,7 +334,27 @@ int main(void) {
     std::cout << "========================================" << std::endl;
 
     std::vector<std::vector<std::string>> cmd_list = {
-        {"get", "key"},
+        // Hashmap Commands
+        {"set", "user:1:name", "Alice"},
+        {"set", "user:2:name", "Bob"},
+        {"set", "user:3:name", "Charlie"},
+        {"get", "user:2:name"},
+        {"expire", "user:1:name", "5000"},
+        {"persist", "user:1:name"},
+        {"del", "user:3:name"},
+
+        // Sorted Set (ZSet) Commands
+        {"zadd", "leaderboard", "100", "Alice"},
+        {"zadd", "leaderboard", "200", "Bob"},
+        {"zadd", "leaderboard", "150", "Charlie"},
+        {"zadd", "leaderboard", "250", "Diana"},
+        {"zadd", "leaderboard", "180", "Eve"},
+        {"zscore", "leaderboard", "Bob"},
+        {"zrem", "leaderboard", "Alice"}, 
+
+        // Sorted Set traversal queries
+        {"zquery", "leaderboard", "150", "Charlie", "0", "3"},
+        {"zquery", "leaderboard", "200", "Bob", "0", "2"}
     };
 
     for (auto cmd : cmd_list) {
