@@ -17,6 +17,15 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// Logging if DEBUG mode
+#ifdef DEBUG
+#define LOG(...)                                                               \
+    do { std::cout << __VA_ARGS__ << std::endl; } while (0)
+#else
+#define LOG(...)                                                               \
+    do { } while (0)
+#endif
+
 // Socket Configs
 #define PORT_NO 1234 // Port number
 #define IP_ADDR 0    // wildcard IP 0.0.0.0
@@ -465,7 +474,7 @@ void process_timers() {
             break; // not expired
         }
 
-        std::cerr << "Removing idle connection: " << conn->fd << std::endl;
+        LOG("Removing idle connection: " << conn->fd);
 
         conn_destroy(conn);
     }
@@ -622,7 +631,7 @@ bool try_handling_request(Conn *conn) {
         .
         .
         [len n]     (len of str n)   (4 bytes)
-        [str n]     (string n)
+        [str n]
 
 
         Output:
@@ -652,10 +661,9 @@ bool try_handling_request(Conn *conn) {
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &addr.sin_addr, ip_str, sizeof(ip_str));
 
-    std::cout << "========================================" << std::endl;
+    LOG("========================================");
 
-    std::cout << "Message recieved from client " << ip_str << ":"
-              << addr.sin_port << std::endl;
+    LOG("Message recieved from client " << ip_str << ":" << addr.sin_port);
 
     // find message length
     uint32_t len = 0;
@@ -666,7 +674,7 @@ bool try_handling_request(Conn *conn) {
         return false; // want close
     }
 
-    std::cout << "Message length: " << len << std::endl;
+    LOG("Message length: " << len);
 
     // Protocol: message body
     if (conn->incoming.size() < 4 + len) {
@@ -675,7 +683,7 @@ bool try_handling_request(Conn *conn) {
 
     // // raw message content
     // std::string msg(conn->incoming.begin(), conn->incoming.end());
-    // std::cout << "Raw Message content: " << msg << std::endl;
+    // LOG( "Raw Message content: " << msg << std::endl;
 
     const uint8_t *request = &conn->incoming[4];
 
@@ -686,18 +694,16 @@ bool try_handling_request(Conn *conn) {
     }
 
     // parsed request commands
-    std::cout << "Commands: ";
+    LOG("Commands: ");
     for (auto c : cmd) {
-        std::cout << c << " ";
+        LOG(c << " ");
     }
-
-    std::cout << std::endl;
 
     struct Response resp;
     do_request(cmd, resp);
     make_response(resp, conn->outgoing);
 
-    std::cout << "========================================" << std::endl;
+    LOG("========================================");
 
     // remove from incoming buffer
     buf_consume(conn->incoming, 4 + len);
@@ -713,7 +719,7 @@ Conn *handle_accept(int fd) {
 
     if (conn_fd < 0) {
         // error
-        std::cerr << "Unable to connect to this client..." << std::endl;
+        LOG("Unable to connect to this client...");
         return NULL;
     }
 
@@ -803,16 +809,16 @@ int main(void) {
 
     int s_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (s_fd == -1) {
-        std::cerr << "Unable to create a socket" << std::endl;
+        LOG("Unable to create a socket");
         return EXIT_FAILURE;
     } else {
-        std::cout << "Socket created successfully!" << std::endl;
+        LOG("Socket created successfully!");
     }
 
     // setting SO_REUSEADDR to prevent TIME_WAIT and reuse addresses
     int val = 1;
     if (setsockopt(s_fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
-        std::cerr << "Unable to set socket option: SO_REUSEADDR" << std::endl;
+        LOG("Unable to set socket option: SO_REUSEADDR");
         return EXIT_FAILURE;
     }
 
@@ -823,24 +829,23 @@ int main(void) {
     addr.sin_addr.s_addr = htonl(IP_ADDR); // IP addr
 
     // bind socket to addr
-    std::cout << "Trying to bind socket to addr..." << std::endl;
+    LOG("Trying to bind socket to addr...");
 
     if (bind(s_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        std::cerr << "Unable to bind socket to addr" << std::endl;
-        // std::cerr << "ERRNO: " << errrno << std::endl;
+        LOG("Unable to bind socket to addr");
         return EXIT_FAILURE;
     } else {
-        std::cout << "Socket bound successfully to addr!" << std::endl;
+        LOG("Socket bound successfully to addr!");
     }
 
     // listen to socket
     if (listen(s_fd, SOMAXCONN) == -1) {
-        std::cerr << "Unable to listen to socket" << std::endl;
+        LOG("Unable to listen to socket");
         return EXIT_FAILURE;
     } else {
         char ip_str[INET_ADDRSTRLEN]; // buffer for IPv4 string
         inet_ntop(AF_INET, &addr.sin_addr, ip_str, sizeof(ip_str));
-        std::cout << "Listening on " << ip_str << ":" << PORT_NO << std::endl;
+        LOG("Listening on " << ip_str << ":" << PORT_NO);
     }
 
     // Initialise Global state
@@ -888,7 +893,7 @@ int main(void) {
             continue; // not an error, process interupted by a signal
         }
         if (rv < 0) {
-            std::cerr << "Error while polling connection!" << std::endl;
+            LOG("Error while polling connection!");
         }
 
         // handle the main listening socket
