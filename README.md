@@ -38,30 +38,6 @@ This project is intentionally minimal and made as a learning exercise.
 | p99 latency     | 0.0546 ms     |
 | Throughput      | 116,541 req/s |
 
-## Command Interface
-
-### Hashmap Commands
-
-`set <key> <value>` - Set a value for a key
-
-`get <key>` - Retrieve the value of a key
-
-`del <key>` - Delete a key and its value
-
-`expire <key> <time>` - Set a TTL for a key (time in milliseconds)
-
-`persist <key>` - Remove the TTL from a key
-
-### Sorted Set (ZSet) Commands
-
-`zadd <key> <score> <name>`- Add a `(name, score)` pair to a sorted set
-
-`zrem <key> <name>`- Remove an entry from the sorted set
-
-`zscore <key> <name>` - Get the score associated with a name
-
-`zquery <key> <score> <name> <offset> <limit>` - Query a sorted set with ordering and pagination
-
 ## Techniques Used
 
 - Event-driven network programming with non-blocking sockets
@@ -105,6 +81,20 @@ This avoids blocking the main loop while maintaining accurate expiration semanti
 - Maintains ordering by `(score, name)`
 - Supports insertion, deletion, and range queries
 - Designed to model Redis ZSet behavior conceptually
+
+## Command Interface
+
+| Command                                        | Description                                     |
+| ---------------------------------------------- | ----------------------------------------------- |
+| `set <key> <value>`                            | Set a value for a key                           |
+| `get <key>`                                    | Retrieve the value of a key                     |
+| `del <key>`                                    | Delete a key and its value                      |
+| `expire <key> <time>`                          | Set a TTL for a key (time in milliseconds)      |
+| `persist <key>`                                | Remove the TTL from a key                       |
+| `zadd <key> <score> <name>`                    | Add a `(name, score)` pair to a sorted set      |
+| `zrem <key> <name>`                            | Remove an entry from the sorted set             |
+| `zscore <key> <name>`                          | Get the score associated with a name            |
+| `zquery <key> <score> <name> <offset> <limit>` | Query a sorted set with ordering and pagination |
 
 ## Project Structure
 
